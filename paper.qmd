@@ -5,10 +5,12 @@ format:
     embed-resources: true
 ---
 
+Ящик с усами для длины клюва.
+
 ```{r}
 data <- read.csv("data/penguins.csv")
 
 x <- data$bill_len
-
+# 
 boxplot(x, ylab = "Bill length, mm")
 ```
