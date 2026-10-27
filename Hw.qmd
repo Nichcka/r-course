@@ -1,0 +1,146 @@
+---
+title: "HW"
+author: "Vinichenko Veronika"
+format: html
+server: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+library(admiral)
+```
+
+Подгрузим все нужные нам файлы:
+```{r}
+mh <- read.xlsx("./SDTM/MH_MEDICALHISTORY.xlsx")
+
+adls <- read.xlsx("./ADaM-like/ADSL.xlsx")
+```
+
+##Переменные которые нам нужны:
+STUDYID (Study Identifier), тип text, из ADSL.STUDYID
+USUBJID (Unique Subject Identifier), тип text, из ADSL.USUBJID
+TRTP (Planned Treatment), тип text, из ADSL.TRTP
+TRTPN (Planned Treatment (N)), тип integer, из ADSL.TRTPN
+MHSEQ (Sequence Number), тип integer, из MH.MHSEQ
+MHCAT (Category for Medical History), тип text, из MH.MHCAT = 'Medical History'
+MHTERM (Reported Term for the Medical History), тип text, из MH.MHTERM
+MHDECOD (Dictionary-Derived Term (PT), тип text, из ), тип text, из MH.MHDECOD 
+MHBODSYS (Body System or Organ Class (SOC), тип text, из ), тип text, из MH.MHBODSYS 
+
+MHSTDTC (Start Date/Time of Medication), тип text, из MH.MHSTDTC (без изменений)
+
+ASTDT (Analysis Start Date), тип text, из MH.MHSTDTC (изменить формат)
+  если отсутствует день, дополнить дату значением «-01»;
+  если отсутствуют и день, и месяц, дополнить дату значением «-01-01»;
+  если дата отсутствует полностью, оставить поле пустым.
+
+ASTDTF (Analysis Start Date Imputation Flag), тип text, НОВАЯ
+  Если дата начала отсутствует полностью или в ней не указан год, то для ASTDTF устанавливается значение «Y».
+  если в дате начала отсутствует месяц, для ASTDTF устанавливается значение «M».
+  если в дате начала отсутствует день, для ASTDTF устанавливается значение «D».
+  Если дата начала указана полностью (все компоненты присутствуют), оставьте поле пустым («»).
+  
+MHENDTC (End Date/Time of Medication), тип text, из MH.MHENDTC (без изменений)
+
+AENDT (Analysis End Date), тип text, НОВАЯ 
+  Если MHENRTPT = 'ONGOING', то выводится '', в противном случае для MH.MHENDTC используется иной формат отображения.
+  Если отсутствует день, то к дате добавляется «-01»;
+  если же отсутствуют и день, и месяц, то к дате добавляется «-01-01»;
+  если же дата отсутствует полностью, то поле остается пустым («»).
+  
+AENDTF (Analysis End Date Imputation Flag), тип text, НОВАЯ
+  Если дата окончания полностью отсутствует или в ней не указан год, то AENDTF = 'Y';
+  если в дате окончания отсутствует месяц, то AENDTF = 'M';
+  если в дате окончания отсутствует день, то AENDTF = 'D';
+  если дата окончания указана полностью (все компоненты на месте), оставить поле пустым ("").
+
+MHENRTPT (End Relative to Reference Time Point ), тип text, из MH.MHENRTPT
+MHENRF (Continuation Flag) тип text, из if MH.MHENRTPT = 'ONGOING' then 'ONGOING', otherwise blank ("")
+
+```{r}
+admh <- 
+  mh |>
+  filter(!is.na(MHTERM)) |>
+  filter(MHCAT == "Medical History") |>
+  select(STUDYID, SUBJID, MHSEQ, MHCAT, MHTERM, MHDECOD, MHBODSYS, MHSTDTC, 
+         MHENDTC, MHENRTPT) |>
+  mutate(
+    ASTDT = case_when(
+      str_length(MHSTDTC) == 7 ~ paste0(MHSTDTC, "-01"),
+      str_length(MHSTDTC) == 4 ~ paste0(MHSTDTC, "-01-01"),
+      str_length(MHSTDTC) == 10 ~ MHSTDTC,
+      is.na(MHSTDTC)  ~ ""
+    ),
+    ASTDTF = case_when(
+      is.na(MHSTDTC) ~ "Y",
+      str_length(MHSTDTC) == 4 ~ "M",
+      str_length(MHSTDTC) == 7 ~ "D",
+      str_length(MHSTDTC) == 10 ~ ""
+    ),
+    AENDT = case_when(
+      MHENRTPT == "ONGOING" ~ "",
+      is.na(MHENDTC) | MHENDTC == "" ~ "",
+      str_detect(MHENDTC, "^\\d{4}$") ~ paste0(MHENDTC, "-01-01"),
+      str_detect(MHENDTC, "^\\d{4}-\\d{2}$") ~ paste0(MHENDTC, "-01"),
+      str_length(MHENDTC) == 10 ~ as.character(MHENDTC)
+    ),
+    AENDTF = case_when(
+      is.na(MHENDTC) | MHENDTC == "" ~ "Y",
+      str_length(MHENDTC) == 4 ~ "M",
+      str_length(MHENDTC) == 7 ~ "D",
+      str_length(MHENDTC) == 10 ~ "",
+      TRUE ~ ""
+    ),
+    MHENRF = case_when(
+      MHENRTPT == 'ONGOING' ~ 'ONGOING',
+      TRUE ~ ""
+    )
+  ) |>
+  left_join(
+      adls |>
+        select(STUDYID, SUBJID, USUBJID, TRTP, TRTPN),
+       by = join_by(STUDYID, SUBJID)
+  )
+
+admh
+```
+```{r}
+cols <- c("ASTDT", "AENDT", "MHSTDTC")
+
+for (col in cols) {
+  x <- as.character(admh[[col]])
+  x[grepl("^\\d{4}$", x) & !is.na(x)] <- paste0(x[grepl("^\\d{4}$", x) & !is.na(x)], "-01-01")
+  admh[[col]] <- format(as.Date(x), "%d.%m.%Y")
+}
+```
+
+```{r}
+ADMH <- admh |>
+  select(
+    STUDYID, USUBJID, TRTP, TRTPN, MHSEQ,
+    MHCAT, MHTERM, MHDECOD, MHBODSYS,
+    MHSTDTC, ASTDT, ASTDTF, MHENDTC, AENDT,
+    AENDTF, MHENRTPT, MHENRF
+  ) |>
+  mutate(
+    across(-c(TRTPN, MHSEQ), as.character),
+    TRTPN = as.integer(TRTPN),
+    MHSEQ = as.integer(MHSEQ)
+  )
+
+glimpse(ADMH)
+
+write.xlsx(ADMH, "./ADaM-like/ADMH.xlsx")
+```
+
+
+
+
+
+
+
+
